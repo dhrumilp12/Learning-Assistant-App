@@ -2,7 +2,7 @@ import openai
 import tempfile
 import os
 import time
-from backend.config.config import OPENAI_API_KEY
+from config.config import OPENAI_API_KEY
 from openai import OpenAI
 
 class Transcriber:

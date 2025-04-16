@@ -1,11 +1,11 @@
 import os
 import time
 import threading
-from backend.config.config import DEFAULT_LANGUAGE, DEFAULT_TARGET_LANGUAGE
-from backend.handler.audio_handler import AudioHandler
-from backend.services.transcription import Transcriber
-from backend.services.translation import Translator
-import backend.utils.utils as utils
+from config.config import DEFAULT_LANGUAGE, DEFAULT_TARGET_LANGUAGE
+from handler.audio_handler import AudioHandler
+from services.transcription import Transcriber
+from services.translation import Translator
+import utils.utils as utils
 
 class LearningAssistantApp:
     def __init__(self):
