@@ -98,6 +98,10 @@ class LearningAssistantApp:
             print(f"Source language: {self.source_language or 'Auto-detect'}")
             print(f"Target language: {self.target_language}")
             print("Press Ctrl+C to stop recording...")
+            print("\nListening...\n")
+            
+            # Reset the transcriber state
+            self.transcriber.reset_state()
             
             # Lock for updating the display
             self.display_lock = threading.Lock()
@@ -106,17 +110,20 @@ class LearningAssistantApp:
             self.current_transcription = ""
             self.current_translation = ""
             
-            # Track last processed content to avoid repetition
-            self.last_processed_text = ""
-            self.min_new_content_length = 3  # Minimum new characters to consider useful
+            # Debug mode flag - set to False for cleaner output
+            debug_mode = False
             
             # Function to process each audio chunk
             def process_chunk(audio_chunk_path):
-                # Transcribe the chunk
-                text = self.transcriber.transcribe_audio(audio_chunk_path, self.source_language)
+                # Transcribe the chunk with real-time flag set to True
+                text = self.transcriber.transcribe_audio(
+                    audio_chunk_path, 
+                    self.source_language,
+                    is_realtime=True,
+                    debug_mode=debug_mode
+                )
                 
-                # Check if we have meaningful new content (avoid repetition)
-                if text and self._is_new_content(text):
+                if text.strip():
                     # Translate the text
                     translation = self.translator.translate_text(
                         text,
@@ -126,12 +133,13 @@ class LearningAssistantApp:
                     
                     # Update the buffers
                     with self.display_lock:
-                        # Add to accumulated text
-                        self.current_transcription += " " + text
-                        self.current_translation += " " + translation
+                        # If too long, trim the history
+                        if len(self.current_transcription) > 1000:
+                            self.current_transcription = self.current_transcription[-500:]
+                            self.current_translation = self.current_translation[-500:]
                         
-                        # Mark as processed to avoid repetition
-                        self.last_processed_text = text
+                        # Add new content
+                        self._add_text_smartly(text, translation)
                     
                     # Display the updated text
                     utils.display_live_caption(self.current_transcription, self.current_translation)
@@ -140,8 +148,13 @@ class LearningAssistantApp:
                 if os.path.exists(audio_chunk_path):
                     os.remove(audio_chunk_path)
             
-            # Start real-time recording with 2-second chunks (shorter for better responsiveness)
-            self.audio_handler.start_realtime_recording(process_chunk, chunk_duration_seconds=1.5)
+            # Start real-time recording with shorter chunks for better responsiveness
+            self.audio_handler.start_realtime_recording(
+                process_chunk, 
+                chunk_duration_seconds=1.5,
+                chunk_overlap_seconds=0.5,
+                debug_mode=debug_mode
+            )
             
             # Keep the main thread alive until Ctrl+C
             try:
@@ -153,8 +166,55 @@ class LearningAssistantApp:
         except Exception as e:
             print(f"Error in real-time processing: {e}")
         finally:
+            # Clean up audio buffer
+            for path in self.audio_buffer:
+                if os.path.exists(path):
+                    os.remove(path)
+            self.audio_buffer = []
+            
             self.audio_handler.stop_realtime_recording()
             self.audio_handler.cleanup()
+            
+    def _add_text_smartly(self, new_text, new_translation):
+        """Add new text and translation without redundancy"""
+        # First addition
+        if not self.current_transcription:
+            self.current_transcription = new_text
+            self.current_translation = new_translation
+            return
+            
+        # Find potential overlapping content
+        words = new_text.split()
+        if len(words) <= 3:  # Very short text, just append
+            self.current_transcription += " " + new_text
+            self.current_translation += " " + new_translation
+            return
+            
+        # Try to find overlap to avoid duplication
+        current_words = self.current_transcription.split()
+        overlap_found = False
+        
+        # Check for overlapping phrases (3+ words)
+        for i in range(3, min(len(words) + 1, 10)):  # Check phrases up to 10 words long
+            phrase_to_check = " ".join(words[:i])
+            if self.current_transcription.strip().endswith(phrase_to_check):
+                # Found overlap - append only the new part
+                self.current_transcription += " " + " ".join(words[i:])
+                self.current_translation += " " + new_translation  # Translation is harder to split, append all
+                overlap_found = True
+                break
+                
+        # If no overlap, just append with proper spacing
+        if not overlap_found:
+            # Check if we should start a new line for a clearly different sentence
+            if (new_text[0].isupper() and 
+                self.current_transcription and 
+                self.current_transcription[-1] in '.!?'):
+                self.current_transcription += "\n" + new_text
+                self.current_translation += "\n" + new_translation
+            else:
+                self.current_transcription += " " + new_text
+                self.current_translation += " " + new_translation
     
     def _is_new_content(self, text):
         """Determine if the text contains meaningful new content"""

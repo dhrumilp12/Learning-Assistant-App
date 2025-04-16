@@ -64,8 +64,38 @@ def display_live_caption(text, translated_text):
     """Display live captions in console with clear formatting"""
     os.system('cls' if os.name == 'nt' else 'clear')  # Clear screen
     print("\n===== REAL-TIME TRANSLATION =====")
+    
     print("\n----- Original Text -----")
-    print(text.strip())
+    # Format multiline text for better readability
+    formatted_text = format_transcript_text(text)
+    print(formatted_text)
+    
     print("\n----- Translation -----")
-    print(translated_text.strip())
+    # Format multiline text for better readability
+    formatted_translation = format_transcript_text(translated_text)
+    print(formatted_translation)
+    
     print("\nPress Ctrl+C to stop recording.")
+
+def format_transcript_text(text):
+    """Format transcript text for better readability"""
+    # Remove excessive whitespace
+    formatted = " ".join(text.split())
+    
+    # Add line breaks for better readability
+    words = formatted.split()
+    lines = []
+    current_line = []
+    
+    for word in words:
+        current_line.append(word)
+        # Add a line break every ~10-15 words or after punctuation
+        if len(current_line) > 12 and word[-1] in ".!?,:;":
+            lines.append(" ".join(current_line))
+            current_line = []
+    
+    # Add any remaining words
+    if current_line:
+        lines.append(" ".join(current_line))
+    
+    return "\n".join(lines)
