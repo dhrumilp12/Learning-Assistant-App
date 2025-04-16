@@ -2,7 +2,8 @@ import openai
 import tempfile
 import os
 import time
-from config import OPENAI_API_KEY
+from backend.config.config import OPENAI_API_KEY
+from openai import OpenAI
 
 class Transcriber:
     def __init__(self):
@@ -54,7 +55,7 @@ class Transcriber:
                 # Try to use the current OpenAI API version
                 try:
                     # For newer OpenAI SDK versions that support the Client model
-                    from openai import OpenAI
+                    
                     client = OpenAI(api_key=self.api_key)
                     
                     # Whisper API parameters

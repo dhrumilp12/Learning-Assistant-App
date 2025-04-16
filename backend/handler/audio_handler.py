@@ -7,7 +7,7 @@ import threading
 import time
 from scipy.io.wavfile import write
 from pydub import AudioSegment
-from config import DEFAULT_SAMPLE_RATE, DEFAULT_CHANNELS
+from backend.config.config import DEFAULT_SAMPLE_RATE, DEFAULT_CHANNELS
 
 class AudioHandler:
     def __init__(self, sample_rate=DEFAULT_SAMPLE_RATE, channels=DEFAULT_CHANNELS):

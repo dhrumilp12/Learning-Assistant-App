@@ -20,13 +20,28 @@ A console-based application that provides real-time speech translation and capti
 
 1. Clone this repository:
 ```bash
-git clone https://github.com/yourusername/Learning-Assistant-App.git
-cd Learning-Assistant-App
+git clone https://github.com/dhrumilp12/Learning-Assistant-App.git
+cd backend
 ```
 
-2. Install dependencies:
-```bash
-pip install -r backend/requirements.txt
-```
+2. **Create and activate a virtual environment (optional but recommended)**:
+    ```
+    python -m venv venv
+    source venv/bin/activate  # On Windows use: .\venv\Scripts\Activate.ps1
+    ```
 
-3. Create a `.env` file in the backend directory with your API keys:
+3. **Configure environment variables**:
+   - Copy the `.env.example` file to a new file named `.env`.
+   - Update the `.env` file with your specific configurations.
+   ```
+   cp .env.example .env
+   ```
+4.  **Install the required dependencies**:
+    ```
+    pip install -r requirements.txt
+    ```
+
+5. **Run app.py**
+   ```
+   python app.py
+   ```

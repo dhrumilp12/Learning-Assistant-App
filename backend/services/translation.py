@@ -1,6 +1,6 @@
 import requests
 import uuid
-from config import AZURE_TRANSLATOR_KEY, AZURE_TRANSLATOR_REGION
+from backend.config.config import AZURE_TRANSLATOR_KEY, AZURE_TRANSLATOR_REGION
 
 class Translator:
     def __init__(self):
