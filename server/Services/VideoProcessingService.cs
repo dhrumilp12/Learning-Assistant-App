@@ -3,8 +3,15 @@ using Azure.AI.Vision.ImageAnalysis;
 using Microsoft.AspNetCore.SignalR;
 using OpenCvSharp;
 using SpeechTranslator.Hubs;
+using System;
+using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Imaging;
+using System.Drawing.Text;
+using System.IO;
+using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace SpeechTranslator.Services
 {
@@ -29,12 +36,13 @@ namespace SpeechTranslator.Services
             _isProcessing = false;
         }
 
-        public async Task<bool> StartVideoProcessingAsync(string videoPath, string sourceLanguage, string targetLanguage, IHubContext<TranslationHub> hubContext)
+        // Fixed the async without await warning by using Task.FromResult
+        public Task<bool> StartVideoProcessingAsync(string videoPath, string sourceLanguage, string targetLanguage, IHubContext<TranslationHub> hubContext)
         {
             if (_isProcessing)
             {
                 _logger.LogWarning("Video processing is already in progress");
-                return false;
+                return Task.FromResult(false);
             }
 
             try
@@ -43,7 +51,7 @@ namespace SpeechTranslator.Services
                 if (!_videoCapture.IsOpened())
                 {
                     _logger.LogError($"Failed to open video file at {videoPath}");
-                    return false;
+                    return Task.FromResult(false);
                 }
 
                 _isProcessing = true;
@@ -55,12 +63,12 @@ namespace SpeechTranslator.Services
                     await ProcessVideoFramesAsync(sourceLanguage, targetLanguage, hubContext);
                 });
                 
-                return true;
+                return Task.FromResult(true);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error starting video processing");
-                return false;
+                return Task.FromResult(false);
             }
         }
 
@@ -238,19 +246,141 @@ namespace SpeechTranslator.Services
                     Cv2.FILLED
                 );
                 
-                // Draw the translated text
-                Cv2.PutText(
-                    processedFrame,
-                    translatedText,
-                    new OpenCvSharp.Point(box.X + 5, box.Y + box.Height - 10),
-                    HersheyFonts.HersheySimplex,
-                    0.7,
-                    new Scalar(255, 255, 255),
-                    2
-                );
+                if (!string.IsNullOrEmpty(translatedText))
+                {
+                    try
+                    {
+                        // Use System.Drawing for Unicode text rendering
+                        using (var bitmap = new Bitmap(box.Width, box.Height))
+                        using (var graphics = Graphics.FromImage(bitmap))
+                        {
+                            // Set up high quality text rendering
+                            graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+                            graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                            
+                            // Fill with transparent background
+                            graphics.Clear(Color.Transparent);
+                            
+                            // Draw the translated text with appropriate font size based on box size
+                            float fontSize = Math.Max(10, Math.Min(16, box.Height / 2));
+                            using (var font = new Font("Arial", fontSize, FontStyle.Bold))
+                            using (var brush = new SolidBrush(Color.White))
+                            {
+                                // Position text within the box
+                                var padding = 5;
+                                var textRect = new RectangleF(
+                                    padding, 
+                                    padding, 
+                                    box.Width - (2 * padding),
+                                    box.Height - (2 * padding)
+                                );
+                                
+                                // Create format for center alignment
+                                using (var format = new StringFormat())
+                                {
+                                    format.Alignment = StringAlignment.Center;
+                                    format.LineAlignment = StringAlignment.Center;
+                                    graphics.DrawString(translatedText, font, brush, textRect, format);
+                                }
+                            }
+                            
+                            // Convert bitmap to OpenCV Mat
+                            using (var memoryStream = new MemoryStream())
+                            {
+                                bitmap.Save(memoryStream, ImageFormat.Png);
+                                memoryStream.Position = 0;
+                                
+                                using (var textMat = Mat.FromImageData(memoryStream.ToArray()))
+                                {
+                                    if (!textMat.Empty())
+                                    {
+                                        // Create an ROI for the text overlay
+                                        var roi = new OpenCvSharp.Rect(
+                                            box.X, 
+                                            box.Y,
+                                            Math.Min(textMat.Width, box.Width),
+                                            Math.Min(textMat.Height, box.Height)
+                                        );
+                                        
+                                        // Ensure ROI is within frame boundaries
+                                        if (roi.X >= 0 && roi.Y >= 0 && 
+                                            roi.X + roi.Width <= processedFrame.Width && 
+                                            roi.Y + roi.Height <= processedFrame.Height)
+                                        {
+                                            // Create a mask from alpha channel (if available)
+                                            using (var mask = textMat.Channels() == 4 ? textMat.ExtractChannel(3) : null)
+                                            {
+                                                // Fixed error: Don't assign to a using variable
+                                                Mat textBgr;
+                                                if (textMat.Channels() == 4)
+                                                {
+                                                    textBgr = new Mat();
+                                                    Cv2.CvtColor(textMat, textBgr, ColorConversionCodes.BGRA2BGR);
+                                                }
+                                                else
+                                                {
+                                                    textBgr = textMat.Clone();
+                                                }
+                                                
+                                                using (textBgr) // Add using here after assignment
+                                                {
+                                                    // Create a Mat for the destination ROI
+                                                    using (var roiMat = new Mat(processedFrame, roi))
+                                                    {
+                                                        // Resize text image to match ROI
+                                                        using (var resizedText = new Mat())
+                                                        {
+                                                            Cv2.Resize(textBgr, resizedText, new OpenCvSharp.Size(roi.Width, roi.Height));
+                                                            
+                                                            if (mask != null)
+                                                            {
+                                                                using (var resizedMask = new Mat())
+                                                                {
+                                                                    Cv2.Resize(mask, resizedMask, new OpenCvSharp.Size(roi.Width, roi.Height));
+                                                                    resizedText.CopyTo(roiMat, resizedMask);
+                                                                }
+                                                            }
+                                                            else
+                                                            {
+                                                                // If no alpha channel, just copy directly
+                                                                resizedText.CopyTo(roiMat);
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Error rendering Unicode text with System.Drawing");
+                        
+                        // Fallback: Use ASCII-only text with OpenCV
+                        string asciiText = ReplaceNonAsciiWithDots(translatedText);
+                        Cv2.PutText(
+                            processedFrame,
+                            asciiText,
+                            new OpenCvSharp.Point(box.X + 5, box.Y + box.Height - 10),
+                            HersheyFonts.HersheySimplex,
+                            0.7,
+                            new Scalar(255, 255, 255),
+                            2
+                        );
+                    }
+                }
             }
             
             return processedFrame;
+        }
+        
+        private string ReplaceNonAsciiWithDots(string text)
+        {
+            // Replace non-ASCII characters with dots as a fallback
+            return string.Join("", text.Select(c => c < 128 ? c : '.'));
         }
 
         private string ConvertFrameToBase64(Mat frame)
