@@ -1,0 +1,114 @@
+{
+  "info": {
+    "name": "Speech & Video Translator API",
+    "description": "Collection for testing the Speech & Video Translator API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Check API Status",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/speech/status",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "speech", "status"]
+        },
+        "description": "Check if the API is running correctly"
+      },
+      "response": []
+    },
+    {
+      "name": "Start Speech Translation",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"sourceLanguage\": \"en\",\n    \"targetLanguage\": \"es\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/speech/start",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "speech", "start"]
+        },
+        "description": "Starts a real-time speech translation session"
+      },
+      "response": []
+    },
+    {
+      "name": "Stop Speech Translation",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/speech/stop",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "speech", "stop"]
+        },
+        "description": "Stops the current speech translation session"
+      },
+      "response": []
+    },
+    {
+      "name": "Translate Video",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "videoFile",
+              "type": "file",
+              "src": "/path/to/your/video.mp4"
+            },
+            {
+              "key": "sourceLanguage",
+              "value": "en",
+              "type": "text"
+            },
+            {
+              "key": "targetLanguage",
+              "value": "es",
+              "type": "text"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/speech/translate-video",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "speech", "translate-video"]
+        },
+        "description": "Uploads and translates text in a video file"
+      },
+      "response": []
+    },
+    {
+      "name": "Stop Video Translation",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/speech/stop-video",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "speech", "stop-video"]
+        },
+        "description": "Stops the current video translation process"
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:5000"
+    }
+  ]
+}

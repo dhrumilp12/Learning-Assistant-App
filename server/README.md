@@ -1,11 +1,13 @@
-# AI Agent - Speech Translator
+# AI Agent - Speech & Video Translator
 
 ## Description
-The AI Agent - Speech Translator is a real-time speech-to-text and translation application. It leverages Microsoft Cognitive Services for speech recognition and translation, enabling users to transcribe spoken words and translate them into a target language. Additionally, the agent provides real-time audio feedback by speaking the translated text.
+The AI Agent - Speech & Video Translator is a real-time translation application. It leverages Microsoft Cognitive Services for speech recognition, text detection in videos, and translation, enabling users to transcribe spoken words and visual text, then translate them into a target language. Additionally, the agent provides real-time audio feedback by speaking the translated text and overlays translated text onto video content.
 
 ## Features
 - **Real-Time Speech Recognition**: Converts spoken words into text using Microsoft Cognitive Services.
 - **Real-Time Translation**: Translates recognized text into a target language.
+- **Video Content Translation**: Detects and translates text in video frames using OCR technology.
+- **Visual Text Overlay**: Replaces original text in videos with translated text.
 - **Audio Feedback**: Speaks the translated text back to the user in real-time.
 - **Multi-Language Support**: Supports multiple source and target languages.
 - **Web Interface**: Access translation services through a modern web interface.
@@ -19,6 +21,7 @@ The AI Agent - Speech Translator is a real-time speech-to-text and translation a
 3. Set up Azure Cognitive Services:
    - Create a Speech resource in the Azure portal.
    - Create a Translator resource in the Azure portal.
+   - Create a Computer Vision resource in the Azure portal.
 
 ### Environment Variables
 Create a `.env` file in the root directory of the project with the following variables:
@@ -29,6 +32,8 @@ SPEECH_ENDPOINT=<Your Azure Speech Endpoint>
 TRANSLATOR_API_KEY=<Your Azure Translator API Key>
 TRANSLATOR_REGION=<Your Azure Translator Region>
 TRANSLATOR_ENDPOINT=<Your Azure Translator Endpoint or https://api.cognitive.microsofttranslator.com/>
+VISION_API_KEY=<Your Azure Computer Vision API Key>
+VISION_ENDPOINT=<Your Azure Computer Vision Endpoint>
 ```
 
 ### Installation
@@ -54,7 +59,7 @@ TRANSLATOR_ENDPOINT=<Your Azure Translator Endpoint or https://api.cognitive.mic
 3. Access the web interface in your browser and:
    - Select source and target languages
    - Start the translation session
-   - Speak into your microphone
+   - Speak into your microphone or upload a video
    - View real-time translations
    - Stop the session when finished
 
@@ -62,20 +67,24 @@ TRANSLATOR_ENDPOINT=<Your Azure Translator Endpoint or https://api.cognitive.mic
    - `GET /api/speech/status` - Check if the service is running
    - `POST /api/speech/start` - Start a translation session
    - `POST /api/speech/stop` - Stop the current translation session
+   - `POST /api/video/translate` - Translate text in a video
 
 ## Project Structure
 - **Program.cs**: Entry point of the application, configures services and middleware.
 - **Controllers/**: API endpoints:
   - `SpeechController.cs`: Handles speech translation requests.
+  - `VideoController.cs`: Handles video translation requests.
 - **Services/**: Contains the core services:
   - `SpeechToTextService.cs`: Handles speech recognition.
   - `TranslationService.cs`: Handles text translation.
+  - `VideoProcessingService.cs`: Handles video frame processing and OCR.
 - **Hubs/**: SignalR hubs for real-time communication:
   - `TranslationHub.cs`: Manages real-time translation updates.
 
 ## Dependencies
 - [Microsoft.CognitiveServices.Speech](https://www.nuget.org/packages/Microsoft.CognitiveServices.Speech/)
 - [Azure.AI.Translation.Text](https://www.nuget.org/packages/Azure.AI.Translation.Text/)
+- [Azure.AI.FormRecognizer](https://www.nuget.org/packages/Azure.AI.FormRecognizer/) (for OCR)
 - [dotenv.net](https://www.nuget.org/packages/dotenv.net/)
 - [Microsoft.AspNetCore.SignalR](https://www.nuget.org/packages/Microsoft.AspNetCore.SignalR/)
 

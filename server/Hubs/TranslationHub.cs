@@ -33,6 +33,27 @@ namespace SpeechTranslator.Hubs
             await Clients.All.SendAsync("ReceiveMessage", message);
         }
 
+        // Video translation methods
+        public async Task SendVideoTranslationStatus(string status)
+        {
+            await Clients.All.SendAsync("VideoTranslationStatus", status);
+        }
+
+        public async Task SendVideoFrame(string frameBase64, int frameNumber, int totalFrames)
+        {
+            await Clients.All.SendAsync("ReceiveVideoFrame", frameBase64, frameNumber, totalFrames);
+        }
+
+        public async Task SendDetectedText(string originalText, string translatedText, object boundingBox)
+        {
+            await Clients.All.SendAsync("TextDetectedInVideo", originalText, translatedText, boundingBox);
+        }
+
+        public async Task SendVideoMetadata(object metadata)
+        {
+            await Clients.All.SendAsync("VideoMetadata", metadata);
+        }
+
         public override async Task OnConnectedAsync()
         {
             _logger.LogInformation($"Client connected: {Context.ConnectionId}");

@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.SignalR;
 using SpeechTranslator.Hubs;
 using SpeechTranslator.Services;
 using System;
+using System.IO;
 using System.Threading.Tasks;
 
 namespace SpeechTranslator.Controllers
@@ -13,17 +14,20 @@ namespace SpeechTranslator.Controllers
     {
         private readonly SpeechToTextService _speechService;
         private readonly TranslationService _translationService;
+        private readonly VideoProcessingService _videoService;
         private readonly IHubContext<TranslationHub> _hubContext;
         private readonly ILogger<SpeechController> _logger;
         
         public SpeechController(
             SpeechToTextService speechService, 
             TranslationService translationService,
+            VideoProcessingService videoService,
             IHubContext<TranslationHub> hubContext,
             ILogger<SpeechController> logger)
         {
             _speechService = speechService;
             _translationService = translationService;
+            _videoService = videoService;
             _hubContext = hubContext;
             _logger = logger;
         }
@@ -125,6 +129,89 @@ namespace SpeechTranslator.Controllers
                 timestamp = DateTime.UtcNow,
                 message = "Speech translator service is operational"
             });
+        }
+        
+        [HttpPost("translate-video")]
+        public async Task<IActionResult> TranslateVideo([FromForm] IFormFile videoFile, [FromForm] string sourceLanguage, [FromForm] string targetLanguage)
+        {
+            try
+            {
+                if (videoFile == null || videoFile.Length == 0)
+                {
+                    return BadRequest("No video file provided");
+                }
+
+                // Create a temporary file to store the uploaded video
+                var tempFilePath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid()}{Path.GetExtension(videoFile.FileName)}");
+                
+                // Save the uploaded file to the temporary location
+                using (var stream = new FileStream(tempFilePath, FileMode.Create))
+                {
+                    await videoFile.CopyToAsync(stream);
+                }
+                
+                _logger.LogInformation($"Video saved to {tempFilePath}, starting processing");
+                
+                // Start video processing
+                var result = await _videoService.StartVideoProcessingAsync(tempFilePath, sourceLanguage, targetLanguage, _hubContext);
+                
+                if (result)
+                {
+                    // Also extract audio for speech translation
+                    _ = Task.Run(async () => 
+                    {
+                        try 
+                        {
+                            // Extract audio from the video
+                            var audioText = await _speechService.ConvertSpeechToTextFromVideoAsync(tempFilePath);
+                            
+                            // Translate it
+                            var translatedAudioText = await _translationService.TranslateTextAsync(
+                                sourceLanguage, targetLanguage, audioText);
+                                
+                            // Send it to clients
+                            await _hubContext.Clients.All.SendAsync(
+                                "ReceiveVideoSpeechTranslation", 
+                                audioText, 
+                                translatedAudioText,
+                                sourceLanguage,
+                                targetLanguage
+                            );
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, "Error processing video speech");
+                        }
+                    });
+                
+                    return Ok(new { message = "Video translation started", tempFilePath });
+                }
+                else
+                {
+                    System.IO.File.Delete(tempFilePath);
+                    return StatusCode(500, new { error = "Failed to start video processing" });
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error processing video for translation");
+                return StatusCode(500, new { error = ex.Message });
+            }
+        }
+
+        [HttpPost("stop-video")]
+        public async Task<IActionResult> StopVideoTranslation()
+        {
+            try
+            {
+                await _videoService.StopVideoProcessingAsync();
+                return Ok(new { message = "Video translation stopped" });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error stopping video translation");
+                return StatusCode(500, new { error = ex.Message });
+            }
         }
         
         public class TranslationRequest

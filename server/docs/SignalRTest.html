@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SignalR Connection Test</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/7.0.0/signalr.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .log { background-color: #f4f4f4; border: 1px solid #ddd; padding: 10px; height: 300px; overflow-y: auto; margin-top: 10px; }
+        .translation { margin: 10px 0; padding: 10px; background-color: #e8f5e9; border-left: 4px solid #4caf50; }
+        .video-container { margin-top: 20px; }
+        #videoDisplay { max-width: 100%; border: 1px solid #ddd; }
+        button { padding: 8px 16px; margin: 5px; background-color: #4caf50; color: white; border: none; cursor: pointer; }
+        button:hover { background-color: #45a049; }
+        .status { margin: 10px 0; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Speech & Video Translator SignalR Test</h1>
+        
+        <div class="status">Connection Status: <span id="connectionStatus">Disconnected</span></div>
+        
+        <button id="connectBtn">Connect to Hub</button>
+        <button id="disconnectBtn" disabled>Disconnect</button>
+        
+        <h2>Translation Results</h2>
+        <div class="log" id="translationLog"></div>
+        
+        <h2>Video Frame</h2>
+        <div class="video-container">
+            <img id="videoDisplay" alt="Video frame will appear here">
+        </div>
+        
+        <h2>Connection Log</h2>
+        <div class="log" id="connectionLog"></div>
+    </div>
+    
+    <script>
+        // DOM elements
+        const connectBtn = document.getElementById('connectBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
+        const connectionStatus = document.getElementById('connectionStatus');
+        const connectionLog = document.getElementById('connectionLog');
+        const translationLog = document.getElementById('translationLog');
+        const videoDisplay = document.getElementById('videoDisplay');
+        
+        // SignalR connection
+        let connection;
+        
+        function log(element, message) {
+            const now = new Date().toLocaleTimeString();
+            element.innerHTML += `<div>[${now}] ${message}</div>`;
+            element.scrollTop = element.scrollHeight;
+        }
+        
+        function updateConnectionStatus(status, color) {
+            connectionStatus.textContent = status;
+            connectionStatus.style.color = color;
+        }
+        
+        connectBtn.addEventListener('click', function() {
+            // Create connection
+            connection = new signalR.HubConnectionBuilder()
+                .withUrl('http://localhost:5000/translationHub')
+                .withAutomaticReconnect()
+                .build();
+            
+            // Set up event handlers
+            connection.on('ReceiveTranslation', (originalText, translatedText, sourceLanguage, targetLanguage) => {
+                translationLog.innerHTML += `
+                    <div class="translation">
+                        <strong>${sourceLanguage} → ${targetLanguage}:</strong><br>
+                        Original: ${originalText}<br>
+                        Translation: ${translatedText}
+                    </div>
+                `;
+                translationLog.scrollTop = translationLog.scrollHeight;
+            });
+            
+            connection.on('ReceiveInterimTranslation', (originalText, translatedText, sourceLanguage, targetLanguage) => {
+                log(connectionLog, `Received interim translation: "${originalText}" → "${translatedText}"`);
+            });
+            
+            connection.on('ReceiveFullTranslation', (originalText, translatedText) => {
+                log(connectionLog, `Received full translation`);
+                translationLog.innerHTML += `
+                    <div class="translation" style="background-color:#e3f2fd; border-left-color:#2196f3;">
+                        <strong>Full Translation:</strong><br>
+                        Original: ${originalText}<br>
+                        Translation: ${translatedText}
+                    </div>
+                `;
+            });
+            
+            connection.on('ReceiveVideoFrame', (frameBase64, frameNumber, totalFrames) => {
+                log(connectionLog, `Received video frame ${frameNumber}/${totalFrames}`);
+                videoDisplay.src = `data:image/jpeg;base64,${frameBase64}`;
+            });
+            
+            connection.on('TextDetectedInVideo', (originalText, translatedText, boundingBox) => {
+                log(connectionLog, `Text detected in video: "${originalText}" → "${translatedText}" at (${boundingBox.X},${boundingBox.Y})`);
+            });
+            
+            connection.on('VideoMetadata', (metadata) => {
+                log(connectionLog, `Video metadata received: ${JSON.stringify(metadata)}`);
+            });
+            
+            connection.on('VideoProcessingComplete', () => {
+                log(connectionLog, `Video processing complete`);
+            });
+            
+            connection.on('VideoProcessingError', (error) => {
+                log(connectionLog, `Video processing error: ${error}`);
+            });
+            
+            connection.onreconnecting(() => {
+                updateConnectionStatus('Reconnecting...', 'orange');
+                log(connectionLog, 'Connection lost, trying to reconnect...');
+            });
+            
+            connection.onreconnected(() => {
+                updateConnectionStatus('Connected', 'green');
+                log(connectionLog, 'Connection reestablished');
+            });
+            
+            connection.onclose(() => {
+                updateConnectionStatus('Disconnected', 'red');
+                log(connectionLog, 'Connection closed');
+                connectBtn.disabled = false;
+                disconnectBtn.disabled = true;
+            });
+            
+            // Start the connection
+            log(connectionLog, 'Connecting to SignalR hub...');
+            connection.start()
+                .then(() => {
+                    updateConnectionStatus('Connected', 'green');
+                    log(connectionLog, 'Connected successfully to SignalR hub');
+                    connectBtn.disabled = true;
+                    disconnectBtn.disabled = false;
+                })
+                .catch(err => {
+                    updateConnectionStatus('Connection Failed', 'red');
+                    log(connectionLog, `Error connecting to SignalR hub: ${err.message}`);
+                });
+        });
+        
+        disconnectBtn.addEventListener('click', function() {
+            if (connection) {
+                connection.stop()
+                    .then(() => {
+                        log(connectionLog, 'Disconnected from SignalR hub');
+                    })
+                    .catch(err => {
+                        log(connectionLog, `Error disconnecting: ${err.message}`);
+                    });
+            }
+        });
+    </script>
+</body>
+</html>
