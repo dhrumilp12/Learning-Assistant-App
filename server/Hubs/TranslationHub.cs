@@ -39,6 +39,11 @@ namespace SpeechTranslator.Hubs
             await Clients.All.SendAsync("VideoTranslationStatus", status);
         }
 
+        public async Task SendFullVideoSpeechTranslation(string originalText, string translatedText, string sourceLanguage, string targetLanguage)
+        {
+            await Clients.All.SendAsync("ReceiveFullVideoSpeechTranslation", originalText, translatedText, sourceLanguage, targetLanguage);
+        }
+
         public async Task SendVideoFrame(string frameBase64, int frameNumber, int totalFrames)
         {
             await Clients.All.SendAsync("ReceiveVideoFrame", frameBase64, frameNumber, totalFrames);

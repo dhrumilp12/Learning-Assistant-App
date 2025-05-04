@@ -87,43 +87,119 @@ namespace SpeechTranslator.Services
 
         public async Task<string> ConvertSpeechToTextFromVideoAsync(string videoFilePath)
         {
-            // Extract audio from video file (placeholder for actual implementation)
-            string extractedAudioPath = ExtractAudioFromVideo(videoFilePath);
+            try 
+            {
+                Console.WriteLine($"Extracting audio from video: {videoFilePath}");
+                // Extract audio from video file
+                string extractedAudioPath = ExtractAudioFromVideo(videoFilePath);
+                Console.WriteLine($"Audio extracted to: {extractedAudioPath}");
 
-            // Use the existing audio file method
-            return await ConvertSpeechToTextAsync(extractedAudioPath);
+                // Try multiple recognition attempts with different configurations
+                // First attempt - standard recognition
+                try
+                {
+                    string result = await ConvertSpeechToTextAsync(extractedAudioPath);
+                    if (!string.IsNullOrWhiteSpace(result))
+                    {
+                        Console.WriteLine($"Successfully recognized text from video audio: {result.Substring(0, Math.Min(50, result.Length))}...");
+                        return result;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"First recognition attempt failed: {ex.Message}. Trying alternate method...");
+                }
+
+                // Second attempt - with enhanced configuration
+                try
+                {
+                    // Create a more specialized configuration for potential noisy audio
+                    using var audioConfig = AudioConfig.FromWavFileInput(extractedAudioPath);
+                    // Create a specialized speech config with noise tolerance settings
+                    var specializedConfig = SpeechConfig.FromEndpoint(new Uri(_speechConfig.EndpointId), _speechConfig.SubscriptionKey);
+                    specializedConfig.SetProperty("SpeechServiceResponse_Detailed", "true");
+                    specializedConfig.EnableAudioLogging();
+                    
+                    using var recognizer = new SpeechRecognizer(specializedConfig, audioConfig);
+                    
+                    Console.WriteLine("Processing audio with specialized configuration...");
+                    var result = await recognizer.RecognizeOnceAsync();
+                    
+                    if (result.Reason == ResultReason.RecognizedSpeech)
+                    {
+                        Console.WriteLine($"Second attempt successful: {result.Text}");
+                        return result.Text;
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Second attempt failed with reason: {result.Reason}");
+                        // If there's any partial recognition, return that
+                        return result.Text ?? "Limited or no speech detected in video.";
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error in second recognition attempt: {ex.Message}");
+                    throw new Exception("Multiple attempts to recognize speech from the video failed.", ex);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error extracting text from video: {ex.Message}");
+                return "Error processing video audio. Try with a video that has clearer speech.";
+            }
         }
 
         private string ExtractAudioFromVideo(string videoFilePath)
         {
             string audioFilePath = Path.ChangeExtension(videoFilePath, ".wav");
 
-            // Construct the FFmpeg command
-            string ffmpegCommand = $"ffmpeg -i \"{videoFilePath}\" -q:a 0 -map a \"{audioFilePath}\" -y";
-
-            // Execute the command
-            var process = new System.Diagnostics.Process
+            try
             {
-                StartInfo = new System.Diagnostics.ProcessStartInfo
+                // Use more optimized FFmpeg settings for speech recognition
+                // -ac 1: Convert to mono (single audio channel)
+                // -ar 16000: Sample rate of 16kHz (good for speech)
+                // -vn: Disable video
+                // -q:a 0: Highest audio quality
+                // -af "loudnorm=I=-16:TP=-1.5:LRA=11": Normalize audio levels for better speech recognition
+                string ffmpegCommand = 
+                    $"ffmpeg -i \"{videoFilePath}\" -ac 1 -ar 16000 -vn -q:a 0 " +
+                    $"-af \"loudnorm=I=-16:TP=-1.5:LRA=11\" \"{audioFilePath}\" -y";
+
+                // Execute the command
+                var process = new System.Diagnostics.Process
                 {
-                    FileName = "cmd.exe",
-                    Arguments = $"/C {ffmpegCommand}",
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
+                    StartInfo = new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = "cmd.exe",
+                        Arguments = $"/C {ffmpegCommand}",
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    }
+                };
+
+                process.Start();
+                
+                // Read the error output for debugging
+                string stderr = process.StandardError.ReadToEnd();
+                process.WaitForExit();
+
+                if (process.ExitCode != 0)
+                {
+                    Console.WriteLine($"FFmpeg error output: {stderr}");
+                    throw new Exception($"Failed to extract audio from video. FFmpeg error code: {process.ExitCode}");
                 }
-            };
 
-            process.Start();
-            process.WaitForExit();
-
-            if (process.ExitCode != 0)
-            {
-                throw new Exception("Failed to extract audio from video. Ensure FFmpeg is installed and accessible from the command line.");
+                Console.WriteLine($"Successfully extracted audio to {audioFilePath}");
+                return audioFilePath;
             }
-
-            return audioFilePath;
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error extracting audio: {ex.Message}");
+                throw;
+            }
         }
 
         public async IAsyncEnumerable<(string Original, string Translated, bool IsInterim)> GetSpeechStreamAsync(string sourceLanguage, string targetLanguage)

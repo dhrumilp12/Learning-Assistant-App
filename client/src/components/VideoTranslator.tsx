@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Box, Typography, Paper, Button, 
   Alert, AlertTitle, LinearProgress, Card, CardContent,
-  Grid
+  Grid, Divider
 } from '@mui/material';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import StopIcon from '@mui/icons-material/Stop';
@@ -29,6 +29,14 @@ interface DetectedText {
   };
 }
 
+interface AudioTranscription {
+  id: number;
+  originalText: string;
+  translatedText: string;
+  timestamp: Date;
+  isFullText?: boolean;
+}
+
 const VideoTranslator: React.FC = () => {
   const { connection } = useHubConnection();
   const [sourceLanguage, setSourceLanguage] = useState<string>('en');
@@ -42,7 +50,7 @@ const VideoTranslator: React.FC = () => {
   const [detectedTexts, setDetectedTexts] = useState<DetectedText[]>([]);
   const [frameNumber, setFrameNumber] = useState<number>(0);
   const [totalFrames, setTotalFrames] = useState<number>(0);
-  const [audioText, setAudioText] = useState<{ original: string, translated: string } | null>(null);
+  const [audioTranscriptions, setAudioTranscriptions] = useState<AudioTranscription[]>([]);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -88,7 +96,35 @@ const VideoTranslator: React.FC = () => {
 
     connection.on('ReceiveVideoSpeechTranslation', 
       (original: string, translated: string, sourceLang: string, targetLang: string) => {
-        setAudioText({ original, translated });
+        const newTranscription: AudioTranscription = {
+          id: Date.now(),
+          originalText: original,
+          translatedText: translated,
+          timestamp: new Date()
+        };
+        
+        setAudioTranscriptions(prev => [...prev, newTranscription]);
+      }
+    );
+
+    // Add handler for full text transcription
+    connection.on('ReceiveFullVideoSpeechTranslation', 
+      (original: string, translated: string, sourceLang: string, targetLang: string) => {
+        // Add with a special indicator that it's the full text
+        const fullTranscription: AudioTranscription = {
+          id: Date.now(),
+          originalText: original,
+          translatedText: translated,
+          timestamp: new Date(),
+          isFullText: true
+        };
+        
+        // Only add if we don't already have too many transcriptions
+        setAudioTranscriptions(prev => {
+          // If we already have a lot of segments, don't add the full text
+          if (prev.length > 5) return prev;
+          return [...prev, fullTranscription];
+        });
       }
     );
 
@@ -100,6 +136,7 @@ const VideoTranslator: React.FC = () => {
       connection.off('VideoProcessingComplete');
       connection.off('VideoProcessingError');
       connection.off('ReceiveVideoSpeechTranslation');
+      connection.off('ReceiveFullVideoSpeechTranslation');
     };
   }, [connection]);
 
@@ -138,7 +175,7 @@ const VideoTranslator: React.FC = () => {
       setIsProcessing(true);
       setProgress(0);
       setDetectedTexts([]);
-      setAudioText(null);
+      setAudioTranscriptions([]);
       setCurrentFrame(null);
 
       await uploadVideoForTranslation(selectedFile, sourceLanguage, targetLanguage);
@@ -272,24 +309,51 @@ const VideoTranslator: React.FC = () => {
 
         <Grid item xs={12} md={4}>
           {/* Audio transcription panel */}
-          {audioText && (
+          {audioTranscriptions.length > 0 && (
             <Card sx={{ mb: 3 }}>
               <CardContent>
                 <Typography variant="h6" gutterBottom>
                   Audio Transcription
+                  {isProcessing && (
+                    <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                      (updating as video plays)
+                    </Typography>
+                  )}
                 </Typography>
-                <Typography variant="body2" sx={{ mb: 1, fontWeight: 500 }}>
-                  Original:
-                </Typography>
-                <Typography variant="body2" sx={{ mb: 2 }}>
-                  {audioText.original}
-                </Typography>
-                <Typography variant="body2" sx={{ mb: 1, fontWeight: 500 }}>
-                  Translated:
-                </Typography>
-                <Typography variant="body2" sx={{ color: 'primary.main' }}>
-                  {audioText.translated}
-                </Typography>
+                <Box sx={{ maxHeight: '400px', overflow: 'auto' }}>
+                  {audioTranscriptions.map((transcription) => (
+                    <Box 
+                      key={transcription.id} 
+                      sx={{ 
+                        mb: 2, 
+                        pb: 2, 
+                        borderBottom: '1px solid #eee',
+                        backgroundColor: transcription.isFullText ? 'rgba(0,0,0,0.03)' : 'transparent'
+                      }}
+                    >
+                      <Typography variant="body2" sx={{ mb: 1, fontWeight: 500 }}>
+                        Original:
+                        {transcription.isFullText && (
+                          <Typography component="span" variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
+                            (complete transcript)
+                          </Typography>
+                        )}
+                      </Typography>
+                      <Typography variant="body2" sx={{ mb: 2 }}>
+                        {transcription.originalText}
+                      </Typography>
+                      <Typography variant="body2" sx={{ mb: 1, fontWeight: 500 }}>
+                        Translated:
+                      </Typography>
+                      <Typography variant="body2" sx={{ color: 'primary.main', mb: 1 }}>
+                        {transcription.translatedText}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {transcription.timestamp.toLocaleTimeString()}
+                      </Typography>
+                    </Box>
+                  ))}
+                </Box>
               </CardContent>
             </Card>
           )}
