@@ -5,6 +5,7 @@ using SpeechTranslator.Services;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 
 namespace SpeechTranslator.Controllers
@@ -18,6 +19,11 @@ namespace SpeechTranslator.Controllers
         private readonly VideoProcessingService _videoService;
         private readonly IHubContext<TranslationHub> _hubContext;
         private readonly ILogger<SpeechController> _logger;
+        
+        private static readonly Dictionary<string, HashSet<double>> _processedSegments = new Dictionary<string, HashSet<double>>();
+        
+        // Add a collection to track temporary files for cleanup
+        private static readonly Dictionary<string, List<string>> _tempFilesTracker = new Dictionary<string, List<string>>();
         
         public SpeechController(
             SpeechToTextService speechService, 
@@ -38,10 +44,8 @@ namespace SpeechTranslator.Controllers
         {
             try
             {
-                // Notify that translation is starting
                 await _hubContext.Clients.All.SendAsync("TranslationStarted");
                 
-                // Start a background task to handle the real-time translation
                 _ = Task.Run(async () =>
                 {
                     try
@@ -99,13 +103,10 @@ namespace SpeechTranslator.Controllers
             {
                 await _speechService.StopListeningAsync();
                 
-                // Get the full accumulated text
                 var (originalText, translatedText) = _speechService.GetFullText();
                 
-                // Send the full text via SignalR
                 await _hubContext.Clients.All.SendAsync("ReceiveFullTranslation", originalText, translatedText);
                 
-                // Send translation ended event
                 await _hubContext.Clients.All.SendAsync("TranslationEnded");
                 
                 return Ok(new { 
@@ -121,7 +122,6 @@ namespace SpeechTranslator.Controllers
             }
         }
         
-        // Add a simple status endpoint for testing the backend
         [HttpGet("status")]
         public IActionResult GetStatus()
         {
@@ -142,10 +142,11 @@ namespace SpeechTranslator.Controllers
                     return BadRequest("No video file provided");
                 }
 
-                // Create a temporary file to store the uploaded video
                 var tempFilePath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid()}{Path.GetExtension(videoFile.FileName)}");
                 
-                // Save the uploaded file to the temporary location
+                var sessionId = Guid.NewGuid().ToString();
+                _tempFilesTracker[sessionId] = new List<string> { tempFilePath };
+                
                 using (var stream = new FileStream(tempFilePath, FileMode.Create))
                 {
                     await videoFile.CopyToAsync(stream);
@@ -153,96 +154,39 @@ namespace SpeechTranslator.Controllers
                 
                 _logger.LogInformation($"Video saved to {tempFilePath}, starting processing");
                 
-                // Start video processing
+                _processedSegments.Clear();
+                
                 var result = await _videoService.StartVideoProcessingAsync(tempFilePath, sourceLanguage, targetLanguage, _hubContext);
                 
                 if (result)
                 {
-                    // Extract audio in segments for progressive translation
                     _ = Task.Run(async () => 
                     {
                         try 
                         {
-                            _logger.LogInformation("Starting audio extraction and processing from video");
-                            
-                            // Get video duration using FFmpeg
-                            var duration = await GetVideoDurationAsync(tempFilePath);
-                            _logger.LogInformation($"Video duration: {duration} seconds");
-                            
-                            if (duration <= 0)
+                            var audioFilePath = Path.ChangeExtension(tempFilePath, ".wav");
+                            if (File.Exists(audioFilePath))
                             {
-                                _logger.LogWarning("Could not determine video duration, processing entire audio");
-                                await ProcessEntireVideoAudio(tempFilePath, sourceLanguage, targetLanguage);
-                                return;
+                                if (_tempFilesTracker.ContainsKey(sessionId))
+                                    _tempFilesTracker[sessionId].Add(audioFilePath);
                             }
 
-                            // Process audio in segments
-                            // For shorter videos (under 30 seconds), use 3 segments
-                            // For longer videos, use more segments
-                            int segmentCount = duration < 30 ? 3 : Math.Min(10, (int)(duration / 10));
-                            double segmentDuration = duration / segmentCount;
-                            
-                            _logger.LogInformation($"Processing audio in {segmentCount} segments of approximately {segmentDuration:0.0} seconds each");
-                            
-                            for (int i = 0; i < segmentCount; i++)
-                            {
-                                double startTime = i * segmentDuration;
-                                double endTime = (i + 1) * segmentDuration;
-                                
-                                _logger.LogInformation($"Processing audio segment {i+1}/{segmentCount} ({startTime:0.0}s to {endTime:0.0}s)");
-                                
-                                // Extract and process this audio segment
-                                string segmentText = await ExtractAndTranscribeAudioSegment(
-                                    tempFilePath, startTime, segmentDuration, sourceLanguage);
-                                
-                                if (!string.IsNullOrWhiteSpace(segmentText))
-                                {
-                                    // Translate the segment text
-                                    string translatedText = await _translationService.TranslateTextAsync(
-                                        sourceLanguage, targetLanguage, segmentText);
-                                    
-                                    // Send to clients
-                                    await _hubContext.Clients.All.SendAsync(
-                                        "ReceiveVideoSpeechTranslation", 
-                                        segmentText,
-                                        translatedText,
-                                        sourceLanguage,
-                                        targetLanguage
-                                    );
-                                    
-                                    _logger.LogInformation($"Sent translation for segment {i+1}: {segmentText.Substring(0, Math.Min(50, segmentText.Length))}...");
-                                    
-                                    // Add delay to simulate sequential processing
-                                    // Shorter delay for short videos, longer delay for long videos
-                                    await Task.Delay((int)(1500 * Math.Min(1, segmentDuration / 5)));
-                                }
-                                else
-                                {
-                                    _logger.LogInformation($"No speech detected in segment {i+1}");
-                                }
-                            }
-                            
-                            // Process the entire audio as a final step
                             await ProcessEntireVideoAudio(tempFilePath, sourceLanguage, targetLanguage, isFullText: true);
+                            
+                            CleanupTempFiles(sessionId);
                         }
                         catch (Exception ex)
                         {
                             _logger.LogError(ex, "Error processing video speech in segments");
-                            await _hubContext.Clients.All.SendAsync(
-                                "ReceiveVideoSpeechTranslation", 
-                                "Error processing audio segments",
-                                "Error al procesar segmentos de audio",
-                                sourceLanguage,
-                                targetLanguage
-                            );
+                            CleanupTempFiles(sessionId);
                         }
                     });
                 
-                    return Ok(new { message = "Video translation started", tempFilePath });
+                    return Ok(new { message = "Video translation started", sessionId });
                 }
                 else
                 {
-                    System.IO.File.Delete(tempFilePath);
+                    CleanupTempFiles(sessionId);
                     return StatusCode(500, new { error = "Failed to start video processing" });
                 }
             }
@@ -253,11 +197,34 @@ namespace SpeechTranslator.Controllers
             }
         }
 
+        private void CleanupTempFiles(string sessionId)
+        {
+            if (_tempFilesTracker.TryGetValue(sessionId, out var tempFiles))
+            {
+                foreach (var file in tempFiles)
+                {
+                    try
+                    {
+                        if (File.Exists(file))
+                        {
+                            File.Delete(file);
+                            _logger.LogInformation($"Deleted temporary file: {file}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, $"Failed to delete temporary file: {file}");
+                    }
+                }
+                
+                _tempFilesTracker.Remove(sessionId);
+            }
+        }
+
         private async Task<double> GetVideoDurationAsync(string videoPath)
         {
             try
             {
-                // Use FFmpeg to get video duration
                 var processInfo = new System.Diagnostics.ProcessStartInfo
                 {
                     FileName = "cmd.exe",
@@ -288,14 +255,21 @@ namespace SpeechTranslator.Controllers
 
         private async Task<string> ExtractAndTranscribeAudioSegment(string videoPath, double startTime, double duration, string language)
         {
+            string segmentAudioPath = string.Empty;
             try
             {
-                string segmentAudioPath = Path.Combine(
+                segmentAudioPath = Path.Combine(
                     Path.GetTempPath(), 
                     $"segment_{Guid.NewGuid()}.wav"
                 );
+                
+                string fileKey = Path.GetFileName(videoPath);
+                string sessionId = _tempFilesTracker.Keys.FirstOrDefault(k => _tempFilesTracker[k].Any(f => f.Contains(fileKey)));
+                if (sessionId != null)
+                {
+                    _tempFilesTracker[sessionId].Add(segmentAudioPath);
+                }
 
-                // Extract audio segment using FFmpeg
                 var ffmpegCmd = $"ffmpeg -i \"{videoPath}\" -ss {startTime} -t {duration} " +
                     $"-ac 1 -ar 16000 -vn -q:a 0 " +
                     $"-af \"loudnorm=I=-16:TP=-1.5:LRA=11\" \"{segmentAudioPath}\" -y";
@@ -322,13 +296,22 @@ namespace SpeechTranslator.Controllers
                     return string.Empty;
                 }
 
-                // Process the segment audio with speech recognition
                 try
                 {
                     string recognizedText = await _speechService.ConvertSpeechToTextAsync(segmentAudioPath);
                     
-                    // Clean up the temporary file
-                    try { System.IO.File.Delete(segmentAudioPath); } catch { }
+                    try 
+                    { 
+                        File.Delete(segmentAudioPath);
+                        if (sessionId != null && _tempFilesTracker.ContainsKey(sessionId))
+                        {
+                            _tempFilesTracker[sessionId].Remove(segmentAudioPath);
+                        }
+                    } 
+                    catch (Exception ex) 
+                    {
+                        _logger.LogWarning(ex, $"Failed to delete segment file: {segmentAudioPath}");
+                    }
                     
                     return recognizedText;
                 }
@@ -341,6 +324,10 @@ namespace SpeechTranslator.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error extracting audio segment");
+                if (!string.IsNullOrEmpty(segmentAudioPath) && File.Exists(segmentAudioPath))
+                {
+                    try { File.Delete(segmentAudioPath); } catch { }
+                }
                 return string.Empty;
             }
         }
@@ -351,14 +338,25 @@ namespace SpeechTranslator.Controllers
             {
                 _logger.LogInformation("Processing entire video audio");
                 
-                // Extract audio from the video
+                string fileKey = Path.GetFileName(videoPath);
+                if (isFullText && _processedSegments.ContainsKey(fileKey) && _processedSegments[fileKey].Contains(-1))
+                {
+                    _logger.LogInformation("Full text already processed, skipping");
+                    return;
+                }
+                
+                if (isFullText && _processedSegments.ContainsKey(fileKey))
+                {
+                    _processedSegments[fileKey].Add(-1);
+                }
+                
                 var audioText = await _speechService.ConvertSpeechToTextFromVideoAsync(videoPath);
                 
                 if (string.IsNullOrWhiteSpace(audioText))
                 {
                     _logger.LogWarning("No speech detected in the full video");
                     
-                    if (!isFullText) // Only send if we haven't already sent segments
+                    if (!isFullText)
                     {
                         await _hubContext.Clients.All.SendAsync(
                             "ReceiveVideoSpeechTranslation", 
@@ -373,11 +371,9 @@ namespace SpeechTranslator.Controllers
 
                 _logger.LogInformation($"Full audio text: {audioText}");
                 
-                // Translate the full text
                 var fullTranslation = await _translationService.TranslateTextAsync(
                     sourceLanguage, targetLanguage, audioText);
                     
-                // Send to clients with a special flag for full text
                 await _hubContext.Clients.All.SendAsync(
                     "ReceiveFullVideoSpeechTranslation", 
                     audioText,
@@ -394,149 +390,19 @@ namespace SpeechTranslator.Controllers
             }
         }
 
-        private async Task ProcessAudioTextInChunks(string audioText, string sourceLanguage, string targetLanguage)
-        {
-            try
-            {
-                // Try different approaches to split the text into meaningful chunks
-                
-                // Approach 1: Split by sentence ending punctuation
-                var sentenceDelimiters = new[] { ". ", "! ", "? ", ".\n", "!\n", "?\n" };
-                var sentences = new List<string>();
-                
-                int startPos = 0;
-                for (int i = 0; i < audioText.Length; i++)
-                {
-                    foreach (var delimiter in sentenceDelimiters)
-                    {
-                        if (i + delimiter.Length <= audioText.Length && 
-                            audioText.Substring(i, delimiter.Length) == delimiter)
-                        {
-                            // Found a sentence delimiter
-                            var sentence = audioText.Substring(startPos, i - startPos + 1).Trim();
-                            if (!string.IsNullOrEmpty(sentence))
-                            {
-                                sentences.Add(sentence);
-                            }
-                            startPos = i + delimiter.Length;
-                            break;
-                        }
-                    }
-                }
-                
-                // Add the last part if any remains
-                if (startPos < audioText.Length)
-                {
-                    var lastSentence = audioText.Substring(startPos).Trim();
-                    if (!string.IsNullOrEmpty(lastSentence))
-                    {
-                        sentences.Add(lastSentence);
-                    }
-                }
-                
-                // Alternative approach if no sentences were found
-                if (sentences.Count <= 1)
-                {
-                    // Approach 2: Split by commas and other punctuation
-                    var secondaryDelimiters = new[] { ", ", "; " };
-                    sentences.Clear();
-                    startPos = 0;
-                    
-                    for (int i = 0; i < audioText.Length; i++)
-                    {
-                        foreach (var delimiter in secondaryDelimiters)
-                        {
-                            if (i + delimiter.Length <= audioText.Length && 
-                                audioText.Substring(i, delimiter.Length) == delimiter)
-                            {
-                                // Found a delimiter
-                                var chunk = audioText.Substring(startPos, i - startPos + 1).Trim();
-                                if (!string.IsNullOrEmpty(chunk))
-                                {
-                                    sentences.Add(chunk);
-                                }
-                                startPos = i + delimiter.Length;
-                                break;
-                            }
-                        }
-                    }
-                    
-                    // Add the last part if any remains
-                    if (startPos < audioText.Length)
-                    {
-                        var lastChunk = audioText.Substring(startPos).Trim();
-                        if (!string.IsNullOrEmpty(lastChunk))
-                        {
-                            sentences.Add(lastChunk);
-                        }
-                    }
-                }
-                
-                // If we still don't have multiple chunks, create artificial ones
-                if (sentences.Count <= 1 && audioText.Length > 30)
-                {
-                    // Approach 3: Split by character count (last resort)
-                    sentences.Clear();
-                    int chunkSize = 30;
-                    
-                    for (int i = 0; i < audioText.Length; i += chunkSize)
-                    {
-                        int length = Math.Min(chunkSize, audioText.Length - i);
-                        sentences.Add(audioText.Substring(i, length));
-                    }
-                }
-                
-                _logger.LogInformation($"Split audio text into {sentences.Count} chunks");
-                
-                // Process each chunk with a delay between them
-                int chunkCount = 0;
-                foreach (var sentence in sentences)
-                {
-                    // Skip the first sentence as we already sent the full text
-                    if (chunkCount++ == 0) 
-                        continue;
-                        
-                    if (!string.IsNullOrWhiteSpace(sentence))
-                    {
-                        try
-                        {
-                            // Translate the chunk
-                            var translatedChunk = await _translationService.TranslateTextAsync(
-                                sourceLanguage, targetLanguage, sentence);
-                                
-                            // Send as a separate transcription event
-                            await _hubContext.Clients.All.SendAsync(
-                                "ReceiveVideoSpeechTranslation", 
-                                sentence, 
-                                translatedChunk,
-                                sourceLanguage,
-                                targetLanguage
-                            );
-                            
-                            _logger.LogInformation($"Sent chunk {chunkCount}: {sentence}");
-                            
-                            // Add a delay between chunks (simulate real-time transcription)
-                            await Task.Delay(1500);
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogError(ex, $"Error processing chunk: {sentence}");
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error processing audio text chunks");
-            }
-        }
-
         [HttpPost("stop-video")]
         public async Task<IActionResult> StopVideoTranslation()
         {
             try
             {
                 await _videoService.StopVideoProcessingAsync();
+                _processedSegments.Clear();
+                
+                foreach (var sessionId in _tempFilesTracker.Keys.ToList())
+                {
+                    CleanupTempFiles(sessionId);
+                }
+                
                 return Ok(new { message = "Video translation stopped" });
             }
             catch (Exception ex)

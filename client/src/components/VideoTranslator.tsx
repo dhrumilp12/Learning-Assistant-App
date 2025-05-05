@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, memo } from 'react';
 import { 
   Box, Typography, Paper, Button, 
   Alert, AlertTitle, LinearProgress, Card, CardContent,
-  Grid, Divider
+  Grid, Divider, Chip
 } from '@mui/material';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import StopIcon from '@mui/icons-material/Stop';
@@ -37,8 +37,58 @@ interface AudioTranscription {
   isFullText?: boolean;
 }
 
+// Create memoized components for better performance
+const DetectedTextItem = memo(({ text }: { text: DetectedText }) => (
+  <Box sx={{ mb: 2, pb: 2, borderBottom: '1px solid #eee' }}>
+    <Typography variant="body2" sx={{ mb: 0.5, fontWeight: 500 }}>
+      Original:
+    </Typography>
+    <Typography variant="body2" sx={{ mb: 1 }}>
+      {text.originalText}
+    </Typography>
+    <Typography variant="body2" sx={{ mb: 0.5, fontWeight: 500 }}>
+      Translated:
+    </Typography>
+    <Typography variant="body2" sx={{ color: 'primary.main' }}>
+      {text.translatedText}
+    </Typography>
+  </Box>
+));
+
+const AudioTranscriptionItem = memo(({ transcription }: { transcription: AudioTranscription }) => (
+  <Box 
+    sx={{ 
+      mb: 2, 
+      pb: 2, 
+      borderBottom: '1px solid #eee',
+      backgroundColor: transcription.isFullText ? 'rgba(0,0,0,0.03)' : 'transparent'
+    }}
+  >
+    <Typography variant="body2" sx={{ mb: 1, fontWeight: 500 }}>
+      Original:
+      {transcription.isFullText && (
+        <Typography component="span" variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
+          (complete transcript)
+        </Typography>
+      )}
+    </Typography>
+    <Typography variant="body2" sx={{ mb: 2 }}>
+      {transcription.originalText}
+    </Typography>
+    <Typography variant="body2" sx={{ mb: 1, fontWeight: 500 }}>
+      Translated:
+    </Typography>
+    <Typography variant="body2" sx={{ color: 'primary.main', mb: 1 }}>
+      {transcription.translatedText}
+    </Typography>
+    <Typography variant="caption" color="text.secondary">
+      {transcription.timestamp.toLocaleTimeString()}
+    </Typography>
+  </Box>
+));
+
 const VideoTranslator: React.FC = () => {
-  const { connection } = useHubConnection();
+  const { connection, connectionState } = useHubConnection();
   const [sourceLanguage, setSourceLanguage] = useState<string>('en');
   const [targetLanguage, setTargetLanguage] = useState<string>('es');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -51,8 +101,14 @@ const VideoTranslator: React.FC = () => {
   const [frameNumber, setFrameNumber] = useState<number>(0);
   const [totalFrames, setTotalFrames] = useState<number>(0);
   const [audioTranscriptions, setAudioTranscriptions] = useState<AudioTranscription[]>([]);
+  const [processingStatus, setProcessingStatus] = useState<string>('');
+  const [showAudioPanel, setShowAudioPanel] = useState<boolean>(true);
+  const [showTextPanel, setShowTextPanel] = useState<boolean>(true);
+  const [connectionLost, setConnectionLost] = useState<boolean>(false);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const audioScrollRef = useRef<HTMLDivElement>(null);
+  const textScrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!connection) return;
@@ -103,14 +159,23 @@ const VideoTranslator: React.FC = () => {
           timestamp: new Date()
         };
         
-        setAudioTranscriptions(prev => [...prev, newTranscription]);
+        // Check for duplicates before adding
+        setAudioTranscriptions(prev => {
+          // Check if this exact text was just added in the last second (to avoid duplicates)
+          const isDuplicate = prev.some(item => 
+            item.originalText === original && 
+            item.translatedText === translated &&
+            Date.now() - item.timestamp.getTime() < 1000
+          );
+          
+          if (isDuplicate) return prev;
+          return [...prev, newTranscription];
+        });
       }
     );
 
-    // Add handler for full text transcription
     connection.on('ReceiveFullVideoSpeechTranslation', 
       (original: string, translated: string, sourceLang: string, targetLang: string) => {
-        // Add with a special indicator that it's the full text
         const fullTranscription: AudioTranscription = {
           id: Date.now(),
           originalText: original,
@@ -119,17 +184,34 @@ const VideoTranslator: React.FC = () => {
           isFullText: true
         };
         
-        // Only add if we don't already have too many transcriptions
+        // Check for duplicates before adding
         setAudioTranscriptions(prev => {
-          // If we already have a lot of segments, don't add the full text
+          // Avoid adding if we already have 5+ translations or if this is a duplicate
           if (prev.length > 5) return prev;
+          
+          const isDuplicate = prev.some(item => 
+            item.originalText === original &&
+            item.translatedText === translated &&
+            item.isFullText === true
+          );
+          
+          if (isDuplicate) return prev;
           return [...prev, fullTranscription];
         });
       }
     );
 
+    connection.on('VideoProcessingStatus', (status: string) => {
+      setProcessingStatus(status);
+    });
+
+    connection.on('VideoProcessingProgress', (percent: number, currentFrame: number, totalFrames: number) => {
+      setProgress(percent);
+      setFrameNumber(currentFrame);
+      setTotalFrames(totalFrames);
+    });
+
     return () => {
-      // Clean up event listeners
       connection.off('VideoMetadata');
       connection.off('ReceiveVideoFrame');
       connection.off('TextDetectedInVideo');
@@ -137,26 +219,47 @@ const VideoTranslator: React.FC = () => {
       connection.off('VideoProcessingError');
       connection.off('ReceiveVideoSpeechTranslation');
       connection.off('ReceiveFullVideoSpeechTranslation');
+      connection.off('VideoProcessingStatus');
+      connection.off('VideoProcessingProgress');
     };
   }, [connection]);
 
-  // Effect to display the current frame
   useEffect(() => {
-    if (currentFrame && canvasRef.current) {
-      const canvas = canvasRef.current;
-      const ctx = canvas.getContext('2d');
-      
-      if (ctx) {
-        const img = new Image();
-        img.onload = () => {
-          canvas.width = img.width;
-          canvas.height = img.height;
-          ctx.drawImage(img, 0, 0);
-        };
-        img.src = `data:image/jpeg;base64,${currentFrame}`;
-      }
+    if (audioScrollRef.current && audioTranscriptions.length > 0) {
+      audioScrollRef.current.scrollTop = audioScrollRef.current.scrollHeight;
     }
-  }, [currentFrame]);
+  }, [audioTranscriptions]);
+
+  const updateCanvas = useCallback((frameData: string) => {
+    if (!canvasRef.current) return;
+    
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    
+    if (!ctx) return;
+    
+    const img = new Image();
+    img.onload = () => {
+      canvas.width = img.width;
+      canvas.height = img.height;
+      ctx.drawImage(img, 0, 0);
+    };
+    img.src = `data:image/jpeg;base64,${frameData}`;
+  }, []);
+
+  useEffect(() => {
+    if (currentFrame) updateCanvas(currentFrame);
+  }, [currentFrame, updateCanvas]);
+
+  useEffect(() => {
+    if (connectionState !== 'Connected' && isProcessing) {
+      setConnectionLost(true);
+    } else if (connectionState === 'Connected' && connectionLost) {
+      setConnectionLost(false);
+      // Optional: Reload the page to get a clean state after reconnection
+      window.location.reload();
+    }
+  }, [connectionState, isProcessing, connectionLost]);
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (event.target.files && event.target.files.length > 0) {
@@ -193,6 +296,9 @@ const VideoTranslator: React.FC = () => {
       setError(err.message || 'Failed to stop video processing');
     }
   };
+
+  const toggleAudioPanel = () => setShowAudioPanel(prev => !prev);
+  const toggleTextPanel = () => setShowTextPanel(prev => !prev);
 
   return (
     <Box>
@@ -275,11 +381,31 @@ const VideoTranslator: React.FC = () => {
           </Alert>
         )}
 
+        {connectionLost && (
+          <Alert severity="warning" sx={{ mt: 2 }}>
+            <AlertTitle>Connection Lost</AlertTitle>
+            The connection to the server has been lost. Attempting to reconnect...
+            <Button 
+              variant="outlined" 
+              size="small" 
+              sx={{ mt: 1 }}
+              onClick={() => window.location.reload()}
+            >
+              Reload Page
+            </Button>
+          </Alert>
+        )}
+
         {isProcessing && (
           <Box sx={{ mt: 2 }}>
-            <Typography variant="body2" sx={{ mb: 1 }}>
-              Processing video: {frameNumber} / {totalFrames} frames ({progress.toFixed(1)}%)
-            </Typography>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+              <Typography variant="body2">
+                Processing video: {frameNumber} / {totalFrames} frames ({progress.toFixed(1)}%)
+              </Typography>
+              <Typography variant="body2" color="primary.main" fontWeight="medium">
+                {processingStatus}
+              </Typography>
+            </Box>
             <LinearProgress variant="determinate" value={progress} sx={{ mb: 2 }} />
           </Box>
         )}
@@ -308,81 +434,90 @@ const VideoTranslator: React.FC = () => {
         </Grid>
 
         <Grid item xs={12} md={4}>
-          {/* Audio transcription panel */}
+          {/* Audio transcription panel with toggle */}
           {audioTranscriptions.length > 0 && (
             <Card sx={{ mb: 3 }}>
-              <CardContent>
-                <Typography variant="h6" gutterBottom>
-                  Audio Transcription
-                  {isProcessing && (
-                    <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
-                      (updating as video plays)
-                    </Typography>
-                  )}
-                </Typography>
-                <Box sx={{ maxHeight: '400px', overflow: 'auto' }}>
-                  {audioTranscriptions.map((transcription) => (
-                    <Box 
-                      key={transcription.id} 
-                      sx={{ 
-                        mb: 2, 
-                        pb: 2, 
-                        borderBottom: '1px solid #eee',
-                        backgroundColor: transcription.isFullText ? 'rgba(0,0,0,0.03)' : 'transparent'
-                      }}
-                    >
-                      <Typography variant="body2" sx={{ mb: 1, fontWeight: 500 }}>
-                        Original:
-                        {transcription.isFullText && (
-                          <Typography component="span" variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
-                            (complete transcript)
-                          </Typography>
-                        )}
+              <CardContent sx={{ pb: 1 }}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                  <Typography variant="h6">
+                    Audio Transcription
+                    {isProcessing && (
+                      <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                        (updating as video plays)
                       </Typography>
-                      <Typography variant="body2" sx={{ mb: 2 }}>
-                        {transcription.originalText}
-                      </Typography>
-                      <Typography variant="body2" sx={{ mb: 1, fontWeight: 500 }}>
-                        Translated:
-                      </Typography>
-                      <Typography variant="body2" sx={{ color: 'primary.main', mb: 1 }}>
-                        {transcription.translatedText}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {transcription.timestamp.toLocaleTimeString()}
-                      </Typography>
-                    </Box>
-                  ))}
+                    )}
+                  </Typography>
+                  <Button 
+                    size="small"
+                    onClick={toggleAudioPanel}
+                  >
+                    {showAudioPanel ? 'Hide' : 'Show'}
+                  </Button>
                 </Box>
+                
+                {showAudioPanel && (
+                  <Box 
+                    ref={audioScrollRef}
+                    sx={{ 
+                      maxHeight: '400px', 
+                      overflow: 'auto',
+                      scrollBehavior: 'smooth'
+                    }}
+                  >
+                    {audioTranscriptions.length > 30 ? (
+                      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                        Showing {Math.min(30, audioTranscriptions.length)} of {audioTranscriptions.length} transcriptions
+                      </Typography>
+                    ) : null}
+                    
+                    {audioTranscriptions
+                      .slice(-30)
+                      .map((transcription) => (
+                        <AudioTranscriptionItem 
+                          key={transcription.id} 
+                          transcription={transcription} 
+                        />
+                      ))}
+                  </Box>
+                )}
               </CardContent>
             </Card>
           )}
 
-          {/* Detected text panel */}
+          {/* Detected text panel with toggle */}
           {detectedTexts.length > 0 && (
             <Card>
-              <CardContent>
-                <Typography variant="h6" gutterBottom>
-                  Detected Text
-                </Typography>
-                <Box sx={{ maxHeight: '300px', overflow: 'auto' }}>
-                  {detectedTexts.map((text) => (
-                    <Box key={text.id} sx={{ mb: 2, pb: 2, borderBottom: '1px solid #eee' }}>
-                      <Typography variant="body2" sx={{ mb: 0.5, fontWeight: 500 }}>
-                        Original:
-                      </Typography>
-                      <Typography variant="body2" sx={{ mb: 1 }}>
-                        {text.originalText}
-                      </Typography>
-                      <Typography variant="body2" sx={{ mb: 0.5, fontWeight: 500 }}>
-                        Translated:
-                      </Typography>
-                      <Typography variant="body2" sx={{ color: 'primary.main' }}>
-                        {text.translatedText}
-                      </Typography>
-                    </Box>
-                  ))}
+              <CardContent sx={{ pb: 1 }}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                  <Typography variant="h6">
+                    Detected Text
+                  </Typography>
+                  <Button 
+                    size="small"
+                    onClick={toggleTextPanel}
+                  >
+                    {showTextPanel ? 'Hide' : 'Show'}
+                  </Button>
                 </Box>
+                
+                {showTextPanel && (
+                  <Box 
+                    ref={textScrollRef}
+                    sx={{ maxHeight: '300px', overflow: 'auto' }}
+                  >
+                    {detectedTexts.length > 30 ? (
+                      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                        Showing {Math.min(30, detectedTexts.length)} of {detectedTexts.length} detected texts
+                      </Typography>
+                    ) : null}
+                    
+                    {detectedTexts
+                      .slice(-30)
+                      .map((text) => (
+                        <DetectedTextItem key={text.id} text={text} />
+                      ))}
+                  </Box>
+                )}
               </CardContent>
             </Card>
           )}

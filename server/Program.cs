@@ -108,6 +108,28 @@ namespace SpeechTranslator
             
             var app = builder.Build();
 
+            // Configure application lifetime handling for cleanup
+            app.Lifetime.ApplicationStopping.Register(() =>
+            {
+                // Find all temporary files created by our application
+                var tempDir = Path.GetTempPath();
+                var appTempFiles = Directory.GetFiles(tempDir)
+                    .Where(f => f.Contains("segment_") || Path.GetFileName(f).StartsWith("speech_translator_"));
+                    
+                foreach (var file in appTempFiles)
+                {
+                    try
+                    {
+                        File.Delete(file);
+                        Console.WriteLine($"Cleanup: Deleted temporary file {file}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Cleanup: Failed to delete temporary file {file}: {ex.Message}");
+                    }
+                }
+            });
+
             // Configure the HTTP request pipeline
             if (app.Environment.IsDevelopment())
             {
