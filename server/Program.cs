@@ -36,7 +36,20 @@ namespace SpeechTranslator
 
             // Add services to the container
             builder.Services.AddControllers();
-            builder.Services.AddSignalR();
+            
+            // Configure SignalR with increased message size limits
+            builder.Services.AddSignalR(hubOptions =>
+            {
+                // Increase maximum message size to 10MB for video frames
+                hubOptions.MaximumReceiveMessageSize = 10 * 1024 * 1024; // 10MB
+                
+                // Increase the StreamBufferCapacity for larger messages
+                hubOptions.StreamBufferCapacity = 20; // Buffer up to 20 items in stream
+                
+                // Increase client timeout for longer operations
+                hubOptions.ClientTimeoutInterval = TimeSpan.FromMinutes(5);
+                hubOptions.KeepAliveInterval = TimeSpan.FromSeconds(15);
+            });
 
              // Configure file size limits for request body
             builder.Services.Configure<IISServerOptions>(options =>

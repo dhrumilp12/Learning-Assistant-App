@@ -145,8 +145,8 @@ const Home: React.FC = () => {
                 Video Translation
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                Upload a video to translate text content within the video. 
-                Translated subtitles will be overlaid on the original video.
+                Use your camera for real-time text translation or upload a video file.
+                Translated text is overlaid on the video in real-time.
               </Typography>
             </CardContent>
             <CardActions>

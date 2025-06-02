@@ -401,5 +401,107 @@ namespace SpeechTranslator.Services
             _videoCapture?.Dispose();
             _videoCapture = null;
         }
+
+        public async Task<(string ProcessedFrameBase64, List<object> DetectedTexts)> ProcessLiveFrameAsync(
+            byte[] frameBytes, string sourceLanguage, string targetLanguage)
+        {
+            var detectedTexts = new List<object>();
+            
+            try
+            {
+                // Convert byte array to OpenCV Mat
+                using var frameData = new Mat();
+                using var stream = new MemoryStream(frameBytes);
+                using var frame = Mat.FromStream(stream, ImreadModes.Color);
+                
+                if (frame.Empty())
+                {
+                    _logger.LogWarning("Received empty frame for processing");
+                    return ("", detectedTexts);
+                }
+                
+                // Create a credential for Azure Computer Vision
+                var credential = new AzureKeyCredential(_visionApiKey);
+                var client = new ImageAnalysisClient(new Uri(_visionEndpoint), credential);
+                
+                // Define visual features for text detection
+                var visualFeatures = VisualFeatures.Read;
+                
+                // Analyze image to detect text
+                var imageContent = BinaryData.FromBytes(frameBytes);
+                var options = new ImageAnalysisOptions { Language = sourceLanguage };
+                var result = await client.AnalyzeAsync(imageContent, visualFeatures, options);
+                
+                // Process detected text and translate it
+                if (result?.Value?.Read != null)
+                {
+                    // Clear previous text regions before processing this frame
+                    _textRegions.Clear();
+                    
+                    foreach (var block in result.Value.Read.Blocks)
+                    {
+                        foreach (var line in block.Lines)
+                        {
+                            string originalText = line.Text;
+                            
+                            // Get bounding polygon
+                            if (line.BoundingPolygon.Count >= 4)
+                            {
+                                // Create a bounding box from the polygon points
+                                int minX = (int)line.BoundingPolygon.Min(p => p.X);
+                                int minY = (int)line.BoundingPolygon.Min(p => p.Y);
+                                int maxX = (int)line.BoundingPolygon.Max(p => p.X);
+                                int maxY = (int)line.BoundingPolygon.Max(p => p.Y);
+                                
+                                var boundingBox = new Rectangle(
+                                    minX, 
+                                    minY,
+                                    maxX - minX,
+                                    maxY - minY
+                                );
+                                
+                                // Translate the detected text
+                                string translatedText = await _translationService.TranslateTextAsync(
+                                    sourceLanguage, 
+                                    targetLanguage, 
+                                    originalText
+                                );
+                                
+                                // Store the text and its location
+                                _textRegions[boundingBox] = (originalText, translatedText);
+                                
+                                // Add to result list
+                                detectedTexts.Add(new
+                                {
+                                    id = Guid.NewGuid().ToString(),
+                                    originalText,
+                                    translatedText,
+                                    boundingBox = new 
+                                    {
+                                        x = boundingBox.X,
+                                        y = boundingBox.Y,
+                                        width = boundingBox.Width,
+                                        height = boundingBox.Height
+                                    }
+                                });
+                            }
+                        }
+                    }
+                }
+                
+                // Create frame with overlaid translations
+                using var processedFrame = OverlayTranslationsOnFrame(frame);
+                
+                // Convert to base64 for sending via SignalR
+                string frameBase64 = ConvertFrameToBase64(processedFrame);
+                
+                return (frameBase64, detectedTexts);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error processing live frame");
+                throw;
+            }
+        }
     }
 }
