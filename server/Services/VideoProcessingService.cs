@@ -5,6 +5,7 @@ using OpenCvSharp;
 using SpeechTranslator.Hubs;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Drawing.Text;
@@ -20,6 +21,7 @@ namespace SpeechTranslator.Services
         private readonly string _visionApiKey;
         private readonly string _visionEndpoint;
         private readonly TranslationService _translationService;
+    private readonly LatencyTracker _latencyTracker;
         private readonly ILogger<VideoProcessingService> _logger;
         private bool _isProcessing;
         private VideoCapture? _videoCapture;
@@ -27,11 +29,17 @@ namespace SpeechTranslator.Services
         // Track detected text regions and their translations
         private readonly Dictionary<Rectangle, (string Original, string Translated)> _textRegions = new();
 
-        public VideoProcessingService(string visionApiKey, string visionEndpoint, TranslationService translationService, ILogger<VideoProcessingService> logger)
+        public VideoProcessingService(
+            string visionApiKey,
+            string visionEndpoint,
+            TranslationService translationService,
+            LatencyTracker latencyTracker,
+            ILogger<VideoProcessingService> logger)
         {
             _visionApiKey = visionApiKey;
             _visionEndpoint = visionEndpoint;
             _translationService = translationService;
+            _latencyTracker = latencyTracker;
             _logger = logger;
             _isProcessing = false;
         }
@@ -103,6 +111,7 @@ namespace SpeechTranslator.Services
 
                 while (_isProcessing)
                 {
+                    var overlayTimer = Stopwatch.StartNew();
                     using var frame = new Mat();
                     if (!_videoCapture.Read(frame) || frame.Empty())
                     {
@@ -127,6 +136,9 @@ namespace SpeechTranslator.Services
                     // Send the processed frame to clients
                     await hubContext.Clients.All.SendAsync("ReceiveVideoFrame", frameBase64, frameCount, totalFrames);
                     
+                    overlayTimer.Stop();
+                    _latencyTracker.RecordVideoOverlayLatency(overlayTimer.Elapsed.TotalMilliseconds);
+
                     // Respect original video frame rate
                     await Task.Delay((int)frameDelay);
                 }

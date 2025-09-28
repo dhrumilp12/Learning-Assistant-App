@@ -105,13 +105,22 @@ namespace SpeechTranslator
             }
 
             // Register services
-            builder.Services.AddSingleton<SpeechToTextService>(sp => new SpeechToTextService(speechEndpoint!, speechApiKey!));
+            builder.Services.AddSingleton<LatencyTracker>();
             builder.Services.AddSingleton<TranslationService>(sp => new TranslationService(translatorApiKey!, translatorEndpoint!, translatorRegion!));
+            builder.Services.AddSingleton<SpeechToTextService>(sp =>
+                new SpeechToTextService(
+                    speechEndpoint!,
+                    speechApiKey!,
+                    sp.GetRequiredService<TranslationService>(),
+                    sp.GetRequiredService<LatencyTracker>(),
+                    sp.GetRequiredService<ILogger<SpeechToTextService>>()
+                ));
             builder.Services.AddSingleton<VideoProcessingService>(sp => 
                 new VideoProcessingService(
                     visionApiKey!, 
                     visionEndpoint!, 
                     sp.GetRequiredService<TranslationService>(),
+                    sp.GetRequiredService<LatencyTracker>(),
                     sp.GetRequiredService<ILogger<VideoProcessingService>>()
                 )
             );

@@ -18,6 +18,7 @@ namespace SpeechTranslator.Controllers
         private readonly VideoProcessingService _videoService;
         private readonly IHubContext<TranslationHub> _hubContext;
         private readonly ILogger<SpeechController> _logger;
+    private readonly LatencyTracker _latencyTracker;
         
         // Add a dictionary to track processed segments and prevent duplicates
         private static readonly Dictionary<string, HashSet<double>> _processedSegments = new Dictionary<string, HashSet<double>>();
@@ -27,12 +28,14 @@ namespace SpeechTranslator.Controllers
             TranslationService translationService,
             VideoProcessingService videoService,
             IHubContext<TranslationHub> hubContext,
+            LatencyTracker latencyTracker,
             ILogger<SpeechController> logger)
         {
             _speechService = speechService;
             _translationService = translationService;
             _videoService = videoService;
             _hubContext = hubContext;
+            _latencyTracker = latencyTracker;
             _logger = logger;
         }
 
@@ -132,6 +135,36 @@ namespace SpeechTranslator.Controllers
                 status = "Running", 
                 timestamp = DateTime.UtcNow,
                 message = "Speech translator service is operational"
+            });
+        }
+
+        [HttpGet("latency")]
+        public IActionResult GetLatencyMetrics()
+        {
+            var stats = _latencyTracker.GetLatencyStats();
+            var successRate = _latencyTracker.GetSuccessRate();
+            var translationStats = _latencyTracker.GetTranslationLatencyStats();
+            var translationSuccessRate = _latencyTracker.GetTranslationSuccessRate();
+            var overlayStats = _latencyTracker.GetVideoOverlayLatencyStats();
+            var overlaySuccessRate = _latencyTracker.GetVideoOverlaySuccessRate();
+
+            return Ok(new
+            {
+                averageMs = Math.Round(stats.Average, 2),
+                p95Ms = Math.Round(stats.P95, 2),
+                p99Ms = Math.Round(stats.P99, 2),
+                totalMeasurements = stats.TotalMeasurements,
+                successRate = Math.Round(successRate, 2),
+                translationAverageMs = Math.Round(translationStats.Average, 2),
+                translationP95Ms = Math.Round(translationStats.P95, 2),
+                translationP99Ms = Math.Round(translationStats.P99, 2),
+                totalTranslationMeasurements = translationStats.TotalMeasurements,
+                translationSuccessRate = Math.Round(translationSuccessRate, 2),
+                videoOverlayAverageMs = Math.Round(overlayStats.Average, 2),
+                videoOverlayP95Ms = Math.Round(overlayStats.P95, 2),
+                videoOverlayP99Ms = Math.Round(overlayStats.P99, 2),
+                totalVideoOverlayMeasurements = overlayStats.TotalMeasurements,
+                videoOverlaySuccessRate = Math.Round(overlaySuccessRate, 2)
             });
         }
         
